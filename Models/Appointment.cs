@@ -17,6 +17,8 @@ namespace backendclinic.Models
 
         [Required]
         public DateTime AppointmentDateTime { get; set; }
-        public int Status { get; set; } 
+        public int Status { get; set; }
+
+        public string? DeclineReason { get; set; } // ✅ Allow NULL values
     }
 }

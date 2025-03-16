@@ -27,17 +27,28 @@ namespace backendclinic.Repositories
             return await _context.Appointments.Include(a => a.User).ToListAsync();
         }
 
-        public async Task<bool> UpdateAppointmentStatusAsync(int appointmentId, int status)
+        public async Task<bool> UpdateAppointmentStatusAsync(int appointmentId, int status, string reason = null)
         {
             var appointment = await _context.Appointments.FindAsync(appointmentId);
             if (appointment == null)
                 return false;
 
             appointment.Status = status;
+
+            if (status == 2) 
+            {
+                appointment.DeclineReason = reason;
+            }
+            else
+            {
+                appointment.DeclineReason = null;
+            }
+
             _context.Appointments.Update(appointment);
             await _context.SaveChangesAsync();
             return true;
         }
+
 
 
         public async Task<Appointment> GetAppointmentByIdAsync(int appointmentId)

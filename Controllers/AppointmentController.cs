@@ -29,43 +29,50 @@ namespace backendclinic.Controllers
         [Authorize(Roles = "User")]
         public async Task<IActionResult> BookAppointment([FromBody] AppointmentRequest request)
         {
-            var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value);
-
-            if (request.AppointmentDateTime == default)
-            {
-                return BadRequest(new { success = false, message = "Invalid appointment date." });
-            }
-
-            if (request.AppointmentDateTime <= DateTime.Now)
-            {
-                return BadRequest(new { success = false, message = "The appointment date must be in the future." });
-            }
-
-            var existingAppointment = await _appointmentRepository.GetAppointmentsAsync();
-            var conflictingAppointment = existingAppointment.Any(a =>
-                (a.AppointmentDateTime >= request.AppointmentDateTime.AddHours(-1) &&
-                 a.AppointmentDateTime <= request.AppointmentDateTime.AddHours(1)) &&
-                a.Status != 0);
-
-            if (conflictingAppointment)
-            {
-                return Conflict(new { success = false, message = "There is already an appointment within 1 hour of the requested time." });
-            }
-
-            var appointment = new Appointment
-            {
-                UserId = userId,
-                AppointmentDateTime = request.AppointmentDateTime,
-                Status = 0
-            };
-
             try
             {
+                var userId = int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value);
+
+                if (request.AppointmentDateTime == default)
+                {
+                    return BadRequest(new { success = false, message = "Invalid appointment date." });
+                }
+
+                if (request.AppointmentDateTime <= DateTime.Now)
+                {
+                    return BadRequest(new { success = false, message = "The appointment date must be in the future." });
+                }
+
+                var existingAppointment = await _appointmentRepository.GetAppointmentsAsync();
+                var conflictingAppointment = existingAppointment.Any(a =>
+                    (a.AppointmentDateTime >= request.AppointmentDateTime.AddHours(-1) &&
+                     a.AppointmentDateTime <= request.AppointmentDateTime.AddHours(1)) &&
+                    a.Status != 0);
+
+                if (conflictingAppointment)
+                {
+                    return Conflict(new { success = false, message = "There is already an appointment within 1 hour of the requested time." });
+                }
+
+                // ✅ Check if user exists
+                var user = await _userRepository.GetUserByIdAsync(userId);
+                if (user == null)
+                {
+                    return BadRequest(new { success = false, message = "User not found." });
+                }
+
+                var appointment = new Appointment
+                {
+                    UserId = userId,
+                    AppointmentDateTime = request.AppointmentDateTime,
+                    Status = 0,
+                    DeclineReason = null // Ensures field is set properly
+                };
+
                 await _appointmentRepository.BookAppointmentAsync(appointment);
 
-                // ✅ Get user phone number
-                var user = await _userRepository.GetUserByIdAsync(userId);
-                if (user != null && !string.IsNullOrEmpty(user.PhoneNumber))
+                // ✅ Send WhatsApp Notification
+                if (!string.IsNullOrEmpty(user.PhoneNumber))
                 {
                     string message = $"Hello {user.FirstName}, your appointment on {request.AppointmentDateTime} is waiting for admin approval.";
                     await _greenApiService.SendWhatsAppMessageAsync(user.PhoneNumber, message);
@@ -75,7 +82,12 @@ namespace backendclinic.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = "An error occurred while booking the appointment.", error = ex.Message });
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "An error occurred while booking the appointment.",
+                    error = ex.InnerException?.Message ?? ex.Message
+                });
             }
         }
 
@@ -92,6 +104,7 @@ namespace backendclinic.Controllers
                     UserId = a.UserId,
                     AppointmentDateTime = a.AppointmentDateTime,
                     Status = a.Status,
+                    DeclineReason = a.DeclineReason, // ✅ Include DeclineReason
                     User = new UserDTO
                     {
                         Id = a.User.Id,
@@ -123,30 +136,39 @@ namespace backendclinic.Controllers
                     return NotFound(new { success = false, message = "Appointment not found." });
                 }
 
-                var success = await _appointmentRepository.UpdateAppointmentStatusAsync(appointmentId, request.Status);
+                if (request.Status == 2 && string.IsNullOrWhiteSpace(request.Reason))
+                {
+                    return BadRequest(new { success = false, message = "Declined status requires a reason." });
+                }
+
+                var success = await _appointmentRepository.UpdateAppointmentStatusAsync(appointmentId, request.Status, request.Reason);
                 if (!success)
                 {
                     return StatusCode(500, new { success = false, message = "Failed to update appointment status." });
                 }
 
-                if (request.Status == 1)
+                var user = await _userRepository.GetUserByIdAsync(appointment.UserId);
+                if (user != null && !string.IsNullOrEmpty(user.PhoneNumber))
                 {
-                    var user = await _userRepository.GetUserByIdAsync(appointment.UserId);
-                    if (user != null && !string.IsNullOrEmpty(user.PhoneNumber))
-                    {
-                        string message = $"Hello {user.FirstName}, your appointment on {appointment.AppointmentDateTime} has been approved. See you soon!";
-                        await _greenApiService.SendWhatsAppMessageAsync(user.PhoneNumber, message);
-                    }
+                    string message = request.Status == 1
+                        ? $"Hello {user.FirstName}, your appointment on {appointment.AppointmentDateTime} has been approved. See you soon!"
+                        : $"Hello {user.FirstName}, your appointment on {appointment.AppointmentDateTime} has been declined. Reason: {request.Reason}";
+
+                    await _greenApiService.SendWhatsAppMessageAsync(user.PhoneNumber, message);
                 }
 
                 return Ok(new { success = true, message = "Appointment status updated successfully." });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { success = false, message = "An error occurred while updating the appointment status.", error = ex.Message });
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "An error occurred while updating the appointment status.",
+                    error = ex.InnerException?.Message ?? ex.Message
+                });
             }
         }
-
     }
 
     public class AppointmentRequest
@@ -157,5 +179,6 @@ namespace backendclinic.Controllers
     public class AppointmentStatusRequest
     {
         public int Status { get; set; }
+        public string Reason { get; set; }
     }
 }
