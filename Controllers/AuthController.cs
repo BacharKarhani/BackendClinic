@@ -87,7 +87,7 @@ namespace backendclinic.Controllers
         [HttpGet("test")]
         public IActionResult Test()
         {
-            return Ok(new { message = "Hello Bashar" });
+            return Ok(new { message = "Hello BOSS" });
         }
 
 
